@@ -1,4 +1,4 @@
-# Copyright 2016 The Chromium Authors. All rights reserved.
+# Copyright 2013 The Flutter Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -60,11 +60,11 @@ shared_library("flutter_shell_native") {
     "$flutter_root/lib/ui",
     "$flutter_root/runtime",
     "$flutter_root/shell/common",
-    "//garnet/public/lib/fxl",
     "//third_party/skia",
-    "//third_party/skia:gpu",
   ]
-  if (flutter_runtime_mode == "debug") {
+  if (flutter_runtime_mode == "debug" ||
+      flutter_runtime_mode == "dynamic_profile" ||
+      flutter_runtime_mode == "dynamic_release") {
     deps += [ "//third_party/dart/runtime:libdart_jit" ]
   } else {
     deps += [ "//third_party/dart/runtime:libdart_precompiled_runtime" ]
@@ -102,12 +102,17 @@ java_library("flutter_shell_java") {
     "io/flutter/app/FlutterApplication.java",
     "io/flutter/app/FlutterFragmentActivity.java",
     "io/flutter/app/FlutterPluginRegistry.java",
+    "io/flutter/embedding/engine/FlutterEngine.java",
+    "io/flutter/embedding/engine/FlutterJNI.java",
+    "io/flutter/embedding/engine/dart/PlatformMessageHandler.java",
+    "io/flutter/embedding/engine/renderer/FlutterRenderer.java",
+    "io/flutter/embedding/engine/renderer/OnFirstFrameRenderedListener.java",
     "io/flutter/plugin/common/ActivityLifecycleListener.java",
     "io/flutter/plugin/common/BasicMessageChannel.java",
     "io/flutter/plugin/common/BinaryCodec.java",
     "io/flutter/plugin/common/BinaryMessenger.java",
-    "io/flutter/plugin/common/FlutterException.java",
     "io/flutter/plugin/common/EventChannel.java",
+    "io/flutter/plugin/common/FlutterException.java",
     "io/flutter/plugin/common/JSONMessageCodec.java",
     "io/flutter/plugin/common/JSONMethodCodec.java",
     "io/flutter/plugin/common/JSONUtil.java",
@@ -122,37 +127,47 @@ java_library("flutter_shell_java") {
     "io/flutter/plugin/editing/InputConnectionAdaptor.java",
     "io/flutter/plugin/editing/TextInputPlugin.java",
     "io/flutter/plugin/platform/PlatformPlugin.java",
+    "io/flutter/plugin/platform/PlatformView.java",
+    "io/flutter/plugin/platform/PlatformViewFactory.java",
+    "io/flutter/plugin/platform/PlatformViewRegistry.java",
+    "io/flutter/plugin/platform/PlatformViewRegistryImpl.java",
+    "io/flutter/plugin/platform/PlatformViewsController.java",
+    "io/flutter/plugin/platform/SingleViewPresentation.java",
+    "io/flutter/plugin/platform/VirtualDisplayController.java",
     "io/flutter/util/PathUtils.java",
     "io/flutter/util/Preconditions.java",
     "io/flutter/view/AccessibilityBridge.java",
+    "io/flutter/view/FlutterCallbackInformation.java",
     "io/flutter/view/FlutterMain.java",
     "io/flutter/view/FlutterNativeView.java",
+    "io/flutter/view/FlutterRunArguments.java",
     "io/flutter/view/FlutterView.java",
     "io/flutter/view/ResourceCleaner.java",
     "io/flutter/view/ResourceExtractor.java",
     "io/flutter/view/ResourcePaths.java",
+    "io/flutter/view/ResourceUpdater.java",
     "io/flutter/view/TextureRegistry.java",
     "io/flutter/view/VsyncWaiter.java",
   ]
 
   deps = [
-    ":android_support_v4",
+    ":android_support_v13",
   ]
 
   jar_path = "$root_out_dir/flutter_java.jar"
 }
 
-java_prebuilt("android_support_v4") {
+java_prebuilt("android_support_v13") {
   supports_android = true
 
-  jar_path = "//third_party/android_tools/sdk/extras/android/support/v4/android-support-v4.jar"
+  jar_path = "//third_party/android_tools/sdk/extras/android/support/v13/android-support-v13.jar"
 }
 
 copy("flutter_shell_assets") {
   visibility = [ ":*" ]
 
   sources = [
-    "//third_party/icu/android/icudtl.dat",
+    "//third_party/icu/flutter/icudtl.dat",
   ]
 
   outputs = [

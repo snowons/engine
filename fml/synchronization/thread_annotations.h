@@ -1,4 +1,4 @@
-// Copyright 2016 The Fuchsia Authors. All rights reserved.
+// Copyright 2013 The Flutter Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,9 +15,11 @@
 #ifndef FLUTTER_FML_SYNCHRONIZATION_THREAD_ANNOTATIONS_H_
 #define FLUTTER_FML_SYNCHRONIZATION_THREAD_ANNOTATIONS_H_
 
+#include "flutter/fml/build_config.h"
+
 // Enable thread-safety attributes only with clang.
 // The attributes can be safely erased when compiling with other compilers.
-#if defined(__clang__)
+#if defined(__clang__) && !defined(OS_ANDROID)
 #define FML_THREAD_ANNOTATION_ATTRIBUTE__(x) __attribute__((x))
 #else
 #define FML_THREAD_ANNOTATION_ATTRIBUTE__(x)

@@ -1,4 +1,4 @@
-// Copyright 2017 The Flutter Authors. All rights reserved.
+// Copyright 2013 The Flutter Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "flutter/fml/macros.h"
+#include "flutter/fml/mapping.h"
 
 namespace blink {
 
@@ -20,8 +21,9 @@ class AssetResolver {
 
   virtual bool IsValid() const = 0;
 
-  virtual bool GetAsBuffer(const std::string& asset_name,
-                           std::vector<uint8_t>* data) const = 0;
+  FML_WARN_UNUSED_RESULT
+  virtual std::unique_ptr<fml::Mapping> GetAsMapping(
+      const std::string& asset_name) const = 0;
 
  private:
   FML_DISALLOW_COPY_AND_ASSIGN(AssetResolver);

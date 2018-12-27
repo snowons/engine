@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Flutter Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,19 +6,23 @@
 
 #include "flutter/common/settings.h"
 #include "flutter/common/task_runners.h"
+#include "flutter/fml/logging.h"
+#include "flutter/fml/task_runner.h"
 #include "flutter/lib/ui/text/font_collection.h"
 #include "flutter/lib/ui/ui_dart_state.h"
+#include "flutter/lib/ui/window/window.h"
 #include "flutter/third_party/txt/src/txt/font_style.h"
 #include "flutter/third_party/txt/src/txt/font_weight.h"
 #include "flutter/third_party/txt/src/txt/paragraph_style.h"
 #include "flutter/third_party/txt/src/txt/text_decoration.h"
 #include "flutter/third_party/txt/src/txt/text_style.h"
-#include "lib/fxl/tasks/task_runner.h"
-#include "lib/tonic/converter/dart_converter.h"
-#include "lib/tonic/dart_args.h"
-#include "lib/tonic/dart_binding_macros.h"
-#include "lib/tonic/dart_library_natives.h"
 #include "third_party/icu/source/common/unicode/ustring.h"
+#include "third_party/skia/include/core/SkColor.h"
+#include "third_party/tonic/converter/dart_converter.h"
+#include "third_party/tonic/dart_args.h"
+#include "third_party/tonic/dart_binding_macros.h"
+#include "third_party/tonic/dart_library_natives.h"
+#include "third_party/tonic/typed_data/dart_byte_data.h"
 
 namespace blink {
 namespace {
@@ -39,6 +43,8 @@ const int tsWordSpacingIndex = 11;
 const int tsHeightIndex = 12;
 const int tsLocaleIndex = 13;
 const int tsBackgroundIndex = 14;
+const int tsForegroundIndex = 15;
+const int tsTextShadowsIndex = 16;
 
 const int tsColorMask = 1 << tsColorIndex;
 const int tsTextDecorationMask = 1 << tsTextDecorationIndex;
@@ -54,6 +60,8 @@ const int tsWordSpacingMask = 1 << tsWordSpacingIndex;
 const int tsHeightMask = 1 << tsHeightIndex;
 const int tsLocaleMask = 1 << tsLocaleIndex;
 const int tsBackgroundMask = 1 << tsBackgroundIndex;
+const int tsForegroundMask = 1 << tsForegroundIndex;
+const int tsTextShadowsMask = 1 << tsTextShadowsIndex;
 
 // ParagraphStyle
 
@@ -79,6 +87,16 @@ const int psLineHeightMask = 1 << psLineHeightIndex;
 const int psEllipsisMask = 1 << psEllipsisIndex;
 const int psLocaleMask = 1 << psLocaleIndex;
 
+// TextShadows decoding
+
+constexpr uint32_t kColorDefault = 0xFF000000;
+constexpr uint32_t kBytesPerShadow = 16;
+constexpr uint32_t kShadowPropertiesCount = 4;
+constexpr uint32_t kColorOffset = 0;
+constexpr uint32_t kXOffset = 1;
+constexpr uint32_t kYOffset = 2;
+constexpr uint32_t kBlurOffset = 3;
+
 }  // namespace
 
 static void ParagraphBuilder_constructor(Dart_NativeArguments args) {
@@ -101,15 +119,15 @@ void ParagraphBuilder::RegisterNatives(tonic::DartLibraryNatives* natives) {
        FOR_EACH_BINDING(DART_REGISTER_NATIVE)});
 }
 
-fxl::RefPtr<ParagraphBuilder> ParagraphBuilder::create(
+fml::RefPtr<ParagraphBuilder> ParagraphBuilder::create(
     tonic::Int32List& encoded,
     const std::string& fontFamily,
     double fontSize,
     double lineHeight,
     const std::u16string& ellipsis,
     const std::string& locale) {
-  return fxl::MakeRefCounted<ParagraphBuilder>(
-      encoded, fontFamily, fontSize, lineHeight, ellipsis, locale);
+  return fml::MakeRefCounted<ParagraphBuilder>(encoded, fontFamily, fontSize,
+                                               lineHeight, ellipsis, locale);
 }
 
 ParagraphBuilder::ParagraphBuilder(tonic::Int32List& encoded,
@@ -145,30 +163,57 @@ ParagraphBuilder::ParagraphBuilder(tonic::Int32List& encoded,
   if (mask & psMaxLinesMask)
     style.max_lines = encoded[psMaxLinesIndex];
 
-  if (mask & psEllipsisMask) {
+  if (mask & psEllipsisMask)
     style.ellipsis = ellipsis;
-  }
 
-  if (mask & psLocaleMask) {
+  if (mask & psLocaleMask)
     style.locale = locale;
-  }
 
+  FontCollection& font_collection =
+      UIDartState::Current()->window()->client()->GetFontCollection();
   m_paragraphBuilder = std::make_unique<txt::ParagraphBuilder>(
-      style, blink::FontCollection::ForProcess().GetFontCollection());
+      style, font_collection.GetFontCollection());
 }  // namespace blink
 
 ParagraphBuilder::~ParagraphBuilder() = default;
 
+void decodeTextShadows(Dart_Handle shadows_data,
+                       std::vector<txt::TextShadow>& decoded_shadows) {
+  decoded_shadows.clear();
+
+  tonic::DartByteData byte_data(shadows_data);
+  FML_CHECK(byte_data.length_in_bytes() % kBytesPerShadow == 0);
+
+  const uint32_t* uint_data = static_cast<const uint32_t*>(byte_data.data());
+  const float* float_data = static_cast<const float*>(byte_data.data());
+
+  size_t shadow_count = byte_data.length_in_bytes() / kBytesPerShadow;
+  size_t shadow_count_offset = 0;
+  for (size_t shadow_index = 0; shadow_index < shadow_count; ++shadow_index) {
+    shadow_count_offset = shadow_index * kShadowPropertiesCount;
+    SkColor color =
+        uint_data[shadow_count_offset + kColorOffset] ^ kColorDefault;
+    decoded_shadows.emplace_back(
+        color,
+        SkPoint::Make(float_data[shadow_count_offset + kXOffset],
+                      float_data[shadow_count_offset + kYOffset]),
+        float_data[shadow_count_offset + kBlurOffset]);
+  }
+}
+
 void ParagraphBuilder::pushStyle(tonic::Int32List& encoded,
-                                 const std::string& fontFamily,
+                                 const std::vector<std::string>& fontFamilies,
                                  double fontSize,
                                  double letterSpacing,
                                  double wordSpacing,
                                  double height,
                                  const std::string& locale,
                                  Dart_Handle background_objects,
-                                 Dart_Handle background_data) {
-  FXL_DCHECK(encoded.num_elements() == 8);
+                                 Dart_Handle background_data,
+                                 Dart_Handle foreground_objects,
+                                 Dart_Handle foreground_data,
+                                 Dart_Handle shadows_data) {
+  FML_DCHECK(encoded.num_elements() == 8);
 
   int32_t mask = encoded[0];
 
@@ -176,6 +221,8 @@ void ParagraphBuilder::pushStyle(tonic::Int32List& encoded,
   // explicitly given.
   txt::TextStyle style = m_paragraphBuilder->PeekStyle();
 
+  // Only change the style property from the previous value if a new explicitly
+  // set value is available
   if (mask & tsColorMask)
     style.color = encoded[tsColorIndex];
 
@@ -196,18 +243,14 @@ void ParagraphBuilder::pushStyle(tonic::Int32List& encoded,
     // property wasn't wired up either.
   }
 
-  if (mask & (tsFontWeightMask | tsFontStyleMask | tsFontFamilyMask |
-              tsFontSizeMask | tsLetterSpacingMask | tsWordSpacingMask)) {
+  if (mask & (tsFontWeightMask | tsFontStyleMask | tsFontSizeMask |
+              tsLetterSpacingMask | tsWordSpacingMask)) {
     if (mask & tsFontWeightMask)
       style.font_weight =
           static_cast<txt::FontWeight>(encoded[tsFontWeightIndex]);
 
     if (mask & tsFontStyleMask)
-      style.font_style =
-          static_cast<txt::FontStyle>(encoded[tsFontStyleIndex]);
-
-    if (mask & tsFontFamilyMask)
-      style.font_family = fontFamily;
+      style.font_style = static_cast<txt::FontStyle>(encoded[tsFontStyleIndex]);
 
     if (mask & tsFontSizeMask)
       style.font_size = fontSize;
@@ -235,6 +278,23 @@ void ParagraphBuilder::pushStyle(tonic::Int32List& encoded,
     }
   }
 
+  if (mask & tsForegroundMask) {
+    Paint foreground(foreground_objects, foreground_data);
+    if (foreground.paint()) {
+      style.has_foreground = true;
+      style.foreground = *foreground.paint();
+    }
+  }
+
+  if (mask & tsTextShadowsMask) {
+    decodeTextShadows(shadows_data, style.text_shadows);
+  }
+
+  if (mask & tsFontFamilyMask) {
+    style.font_families.insert(style.font_families.end(), fontFamilies.begin(),
+                               fontFamilies.end());
+  }
+
   m_paragraphBuilder->PushStyle(style);
 }
 
@@ -260,7 +320,7 @@ Dart_Handle ParagraphBuilder::addText(const std::u16string& text) {
   return Dart_Null();
 }
 
-fxl::RefPtr<Paragraph> ParagraphBuilder::build() {
+fml::RefPtr<Paragraph> ParagraphBuilder::build() {
   return Paragraph::Create(m_paragraphBuilder->Build());
 }
 

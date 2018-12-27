@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Flutter Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,18 +9,20 @@
 #include <utility>
 
 #include "flutter/assets/directory_asset_bundle.h"
+#include "flutter/assets/zip_asset_store.h"
 #include "flutter/common/settings.h"
+#include "flutter/fml/arraysize.h"
 #include "flutter/fml/file.h"
 #include "flutter/fml/platform/android/jni_util.h"
 #include "flutter/fml/platform/android/jni_weak_ref.h"
 #include "flutter/fml/platform/android/scoped_java_ref.h"
+#include "flutter/lib/ui/plugins/callback_cache.h"
 #include "flutter/runtime/dart_service_isolate.h"
 #include "flutter/shell/common/run_configuration.h"
 #include "flutter/shell/platform/android/android_external_texture_gl.h"
 #include "flutter/shell/platform/android/android_shell_holder.h"
 #include "flutter/shell/platform/android/apk_asset_provider.h"
 #include "flutter/shell/platform/android/flutter_main.h"
-#include "lib/fxl/arraysize.h"
 
 #define ANDROID_SHELL_HOLDER \
   (reinterpret_cast<shell::AndroidShellHolder*>(shell_holder))
@@ -35,19 +37,34 @@ bool CheckException(JNIEnv* env) {
 
   jthrowable exception = env->ExceptionOccurred();
   env->ExceptionClear();
-  FXL_LOG(INFO) << fml::jni::GetJavaExceptionInfo(env, exception);
+  FML_LOG(ERROR) << fml::jni::GetJavaExceptionInfo(env, exception);
   env->DeleteLocalRef(exception);
   return false;
 }
 
 }  // anonymous namespace
 
-static fml::jni::ScopedJavaGlobalRef<jclass>* g_flutter_view_class = nullptr;
-static fml::jni::ScopedJavaGlobalRef<jclass>* g_flutter_native_view_class =
+static fml::jni::ScopedJavaGlobalRef<jclass>* g_flutter_callback_info_class =
     nullptr;
+
+static fml::jni::ScopedJavaGlobalRef<jclass>* g_flutter_jni_class = nullptr;
+
 static fml::jni::ScopedJavaGlobalRef<jclass>* g_surface_texture_class = nullptr;
 
 // Called By Native
+
+static jmethodID g_flutter_callback_info_constructor = nullptr;
+jobject CreateFlutterCallbackInformation(
+    JNIEnv* env,
+    const std::string& callbackName,
+    const std::string& callbackClassName,
+    const std::string& callbackLibraryPath) {
+  return env->NewObject(g_flutter_callback_info_class->obj(),
+                        g_flutter_callback_info_constructor,
+                        env->NewStringUTF(callbackName.c_str()),
+                        env->NewStringUTF(callbackClassName.c_str()),
+                        env->NewStringUTF(callbackLibraryPath.c_str()));
+}
 
 static jmethodID g_handle_platform_message_method = nullptr;
 void FlutterViewHandlePlatformMessage(JNIEnv* env,
@@ -57,7 +74,7 @@ void FlutterViewHandlePlatformMessage(JNIEnv* env,
                                       jint responseId) {
   env->CallVoidMethod(obj, g_handle_platform_message_method, channel, message,
                       responseId);
-  FXL_CHECK(CheckException(env));
+  FML_CHECK(CheckException(env));
 }
 
 static jmethodID g_handle_platform_message_response_method = nullptr;
@@ -67,7 +84,7 @@ void FlutterViewHandlePlatformMessageResponse(JNIEnv* env,
                                               jobject response) {
   env->CallVoidMethod(obj, g_handle_platform_message_response_method,
                       responseId, response);
-  FXL_CHECK(CheckException(env));
+  FML_CHECK(CheckException(env));
 }
 
 static jmethodID g_update_semantics_method = nullptr;
@@ -76,25 +93,41 @@ void FlutterViewUpdateSemantics(JNIEnv* env,
                                 jobject buffer,
                                 jobjectArray strings) {
   env->CallVoidMethod(obj, g_update_semantics_method, buffer, strings);
-  FXL_CHECK(CheckException(env));
+  FML_CHECK(CheckException(env));
+}
+
+static jmethodID g_update_custom_accessibility_actions_method = nullptr;
+void FlutterViewUpdateCustomAccessibilityActions(JNIEnv* env,
+                                                 jobject obj,
+                                                 jobject buffer,
+                                                 jobjectArray strings) {
+  env->CallVoidMethod(obj, g_update_custom_accessibility_actions_method, buffer,
+                      strings);
+  FML_CHECK(CheckException(env));
 }
 
 static jmethodID g_on_first_frame_method = nullptr;
 void FlutterViewOnFirstFrame(JNIEnv* env, jobject obj) {
   env->CallVoidMethod(obj, g_on_first_frame_method);
-  FXL_CHECK(CheckException(env));
+  FML_CHECK(CheckException(env));
+}
+
+static jmethodID g_on_engine_restart_method = nullptr;
+void FlutterViewOnPreEngineRestart(JNIEnv* env, jobject obj) {
+  env->CallVoidMethod(obj, g_on_engine_restart_method);
+  FML_CHECK(CheckException(env));
 }
 
 static jmethodID g_attach_to_gl_context_method = nullptr;
 void SurfaceTextureAttachToGLContext(JNIEnv* env, jobject obj, jint textureId) {
   env->CallVoidMethod(obj, g_attach_to_gl_context_method, textureId);
-  FXL_CHECK(CheckException(env));
+  FML_CHECK(CheckException(env));
 }
 
 static jmethodID g_update_tex_image_method = nullptr;
 void SurfaceTextureUpdateTexImage(JNIEnv* env, jobject obj) {
   env->CallVoidMethod(obj, g_update_tex_image_method);
-  FXL_CHECK(CheckException(env));
+  FML_CHECK(CheckException(env));
 }
 
 static jmethodID g_get_transform_matrix_method = nullptr;
@@ -102,21 +135,24 @@ void SurfaceTextureGetTransformMatrix(JNIEnv* env,
                                       jobject obj,
                                       jfloatArray result) {
   env->CallVoidMethod(obj, g_get_transform_matrix_method, result);
-  FXL_CHECK(CheckException(env));
+  FML_CHECK(CheckException(env));
 }
 
 static jmethodID g_detach_from_gl_context_method = nullptr;
 void SurfaceTextureDetachFromGLContext(JNIEnv* env, jobject obj) {
   env->CallVoidMethod(obj, g_detach_from_gl_context_method);
-  FXL_CHECK(CheckException(env));
+  FML_CHECK(CheckException(env));
 }
 
 // Called By Java
 
-static jlong Attach(JNIEnv* env, jclass clazz, jobject flutterView) {
-  fml::jni::JavaObjectWeakGlobalRef java_object(env, flutterView);
+static jlong AttachJNI(JNIEnv* env,
+                       jclass clazz,
+                       jobject flutterJNI,
+                       jboolean is_background_view) {
+  fml::jni::JavaObjectWeakGlobalRef java_object(env, flutterJNI);
   auto shell_holder = std::make_unique<AndroidShellHolder>(
-      FlutterMain::Get().GetSettings(), java_object);
+      FlutterMain::Get().GetSettings(), java_object, is_background_view);
   if (shell_holder->IsValid()) {
     return reinterpret_cast<jlong>(shell_holder.release());
   } else {
@@ -124,11 +160,12 @@ static jlong Attach(JNIEnv* env, jclass clazz, jobject flutterView) {
   }
 }
 
-static void Detach(JNIEnv* env, jobject jcaller, jlong shell_holder) {
+// TODO(mattcarroll): delete this method here and in FlutterJNI.java
+static void DetachJNI(JNIEnv* env, jobject jcaller, jlong shell_holder) {
   // Nothing to do.
 }
 
-static void Destroy(JNIEnv* env, jobject jcaller, jlong shell_holder) {
+static void DestroyJNI(JNIEnv* env, jobject jcaller, jlong shell_holder) {
   delete ANDROID_SHELL_HOLDER;
 }
 
@@ -140,13 +177,12 @@ static jstring GetObservatoryUri(JNIEnv* env, jclass clazz) {
 static void SurfaceCreated(JNIEnv* env,
                            jobject jcaller,
                            jlong shell_holder,
-                           jobject jsurface,
-                           jint backgroundColor) {
+                           jobject jsurface) {
   // Note: This frame ensures that any local references used by
   // ANativeWindow_fromSurface are released immediately. This is needed as a
   // workaround for https://code.google.com/p/android/issues/detail?id=68174
   fml::jni::ScopedJavaLocalFrame scoped_local_reference_frame(env);
-  auto window = fxl::MakeRefCounted<AndroidNativeWindow>(
+  auto window = fml::MakeRefCounted<AndroidNativeWindow>(
       ANativeWindow_fromSurface(env, jsurface));
   ANDROID_SHELL_HOLDER->GetPlatformView()->NotifyCreated(std::move(window));
 }
@@ -167,16 +203,25 @@ static void SurfaceDestroyed(JNIEnv* env, jobject jcaller, jlong shell_holder) {
 std::unique_ptr<IsolateConfiguration> CreateIsolateConfiguration(
     const blink::AssetManager& asset_manager) {
   if (blink::DartVM::IsRunningPrecompiledCode()) {
-    return IsolateConfiguration::CreateForPrecompiledCode();
+    return IsolateConfiguration::CreateForAppSnapshot();
   }
 
   const auto configuration_from_blob =
       [&asset_manager](const std::string& snapshot_name)
       -> std::unique_ptr<IsolateConfiguration> {
-    std::vector<uint8_t> blob;
-    if (asset_manager.GetAsBuffer(snapshot_name, &blob)) {
-      return IsolateConfiguration::CreateForSnapshot(
-          std::make_unique<fml::DataMapping>(std::move(blob)));
+    auto blob = asset_manager.GetAsMapping(snapshot_name);
+    auto delta = asset_manager.GetAsMapping("kernel_delta.bin");
+    if (blob && delta) {
+      std::vector<std::unique_ptr<fml::Mapping>> kernels;
+      kernels.emplace_back(std::move(blob));
+      kernels.emplace_back(std::move(delta));
+      return IsolateConfiguration::CreateForKernelList(std::move(kernels));
+    }
+    if (blob) {
+      return IsolateConfiguration::CreateForKernel(std::move(blob));
+    }
+    if (delta) {
+      return IsolateConfiguration::CreateForKernel(std::move(delta));
     }
     return nullptr;
   };
@@ -185,51 +230,54 @@ std::unique_ptr<IsolateConfiguration> CreateIsolateConfiguration(
     return kernel;
   }
 
-  if (auto script = configuration_from_blob("snapshot_blob.bin")) {
-    return script;
-  }
-
-  return nullptr;
+  // This happens when starting isolate directly from CoreJIT snapshot.
+  return IsolateConfiguration::CreateForAppSnapshot();
 }
 
-static void RunBundleAndSnapshot(
-    JNIEnv* env,
-    jobject jcaller,
-    jlong shell_holder,
-    jstring jbundlepath,
-    jstring /* snapshot override (unused) */,
-    jstring jEntrypoint,
-    jboolean /* reuse runtime controller (unused) */,
-    jobject jAssetManager) {
-  auto asset_manager = fml::MakeRefCounted<blink::AssetManager>();
+static void RunBundleAndSnapshotFromLibrary(JNIEnv* env,
+                                            jobject jcaller,
+                                            jlong shell_holder,
+                                            jobjectArray jbundlepaths,
+                                            jstring jEntrypoint,
+                                            jstring jLibraryUrl,
+                                            jobject jAssetManager) {
+  auto asset_manager = std::make_shared<blink::AssetManager>();
+  for (const auto& bundlepath :
+       fml::jni::StringArrayToVector(env, jbundlepaths)) {
+    if (bundlepath.empty()) {
+      continue;
+    }
 
-  const auto bundlepath = fml::jni::JavaStringToString(env, jbundlepath);
-
-  if (bundlepath.size() > 0) {
     // If we got a bundle path, attempt to use that as a directory asset
-    // bundle.
-    asset_manager->PushBack(std::make_unique<blink::DirectoryAssetBundle>(
-        fml::OpenFile(bundlepath.c_str(), fml::OpenPermission::kRead, true)));
+    // bundle or a zip asset bundle.
+    const auto file_ext_index = bundlepath.rfind(".");
+    if (bundlepath.substr(file_ext_index) == ".zip") {
+      asset_manager->PushBack(
+          std::make_unique<blink::ZipAssetStore>(bundlepath));
+    } else {
+      asset_manager->PushBack(
+          std::make_unique<blink::DirectoryAssetBundle>(fml::OpenDirectory(
+              bundlepath.c_str(), false, fml::FilePermission::kRead)));
 
-    // Use the last path component of the bundle path to determine the
-    // directory in the APK assets.
-    const auto last_slash_index = bundlepath.rfind("/", bundlepath.size());
-    if (last_slash_index != std::string::npos) {
-      auto apk_asset_dir = bundlepath.substr(
-          last_slash_index + 1, bundlepath.size() - last_slash_index);
+      // Use the last path component of the bundle path to determine the
+      // directory in the APK assets.
+      const auto last_slash_index = bundlepath.rfind("/", bundlepath.size());
+      if (last_slash_index != std::string::npos) {
+        auto apk_asset_dir = bundlepath.substr(
+            last_slash_index + 1, bundlepath.size() - last_slash_index);
 
-      asset_manager->PushBack(std::make_unique<blink::APKAssetProvider>(
-          env,                       // jni environment
-          jAssetManager,             // asset manager
-          std::move(apk_asset_dir))  // apk asset dir
-      );
+        asset_manager->PushBack(std::make_unique<blink::APKAssetProvider>(
+            env,                       // jni environment
+            jAssetManager,             // asset manager
+            std::move(apk_asset_dir))  // apk asset dir
+        );
+      }
     }
   }
 
   auto isolate_configuration = CreateIsolateConfiguration(*asset_manager);
-
   if (!isolate_configuration) {
-    FXL_DLOG(ERROR)
+    FML_DLOG(ERROR)
         << "Isolate configuration could not be determined for engine launch.";
     return;
   }
@@ -239,7 +287,12 @@ static void RunBundleAndSnapshot(
 
   {
     auto entrypoint = fml::jni::JavaStringToString(env, jEntrypoint);
-    if (entrypoint.size() > 0) {
+    auto libraryUrl = fml::jni::JavaStringToString(env, jLibraryUrl);
+
+    if ((entrypoint.size() > 0) && (libraryUrl.size() > 0)) {
+      config.SetEntrypointAndLibrary(std::move(entrypoint),
+                                     std::move(libraryUrl));
+    } else if (entrypoint.size() > 0) {
       config.SetEntrypoint(std::move(entrypoint));
     }
   }
@@ -247,67 +300,15 @@ static void RunBundleAndSnapshot(
   ANDROID_SHELL_HOLDER->Launch(std::move(config));
 }
 
-static void RunBundleAndSource(JNIEnv* env,
-                               jobject jcaller,
-                               jlong shell_holder,
-                               jstring jBundlePath,
-                               jstring main,
-                               jstring packages) {
-  auto asset_manager = fml::MakeRefCounted<blink::AssetManager>();
-
-  const auto bundlepath = fml::jni::JavaStringToString(env, jBundlePath);
-
-  if (bundlepath.size() > 0) {
-    auto directory =
-        fml::OpenFile(bundlepath.c_str(), fml::OpenPermission::kRead, true);
-    asset_manager->PushBack(
-        std::make_unique<blink::DirectoryAssetBundle>(std::move(directory)));
+static jobject LookupCallbackInformation(JNIEnv* env,
+                                         /* unused */ jobject,
+                                         jlong handle) {
+  auto cbInfo = blink::DartCallbackCache::GetCallbackInformation(handle);
+  if (cbInfo == nullptr) {
+    return nullptr;
   }
-
-  auto main_file_path = fml::jni::JavaStringToString(env, main);
-  auto packages_file_path = fml::jni::JavaStringToString(env, packages);
-
-  auto config =
-      IsolateConfiguration::CreateForSource(main_file_path, packages_file_path);
-
-  if (!config) {
-    return;
-  }
-
-  RunConfiguration run_configuration(std::move(config),
-                                     std::move(asset_manager));
-
-  ANDROID_SHELL_HOLDER->Launch(std::move(run_configuration));
-}
-
-void SetAssetBundlePathOnUI(JNIEnv* env,
-                            jobject jcaller,
-                            jlong shell_holder,
-                            jstring jBundlePath) {
-  const auto bundlepath = fml::jni::JavaStringToString(env, jBundlePath);
-
-  if (bundlepath.size() == 0) {
-    return;
-  }
-
-  auto directory =
-      fml::OpenFile(bundlepath.c_str(), fml::OpenPermission::kRead, true);
-
-  if (!directory.is_valid()) {
-    return;
-  }
-
-  std::unique_ptr<blink::AssetResolver> directory_asset_bundle =
-      std::make_unique<blink::DirectoryAssetBundle>(std::move(directory));
-
-  if (!directory_asset_bundle->IsValid()) {
-    return;
-  }
-
-  auto asset_manager = fml::MakeRefCounted<blink::AssetManager>();
-  asset_manager->PushBack(std::move(directory_asset_bundle));
-
-  ANDROID_SHELL_HOLDER->UpdateAssetManager(std::move(asset_manager));
+  return CreateFlutterCallbackInformation(env, cbInfo->name, cbInfo->class_name,
+                                          cbInfo->library_path);
 }
 
 static void SetViewportMetrics(JNIEnv* env,
@@ -324,18 +325,18 @@ static void SetViewportMetrics(JNIEnv* env,
                                jint physicalViewInsetRight,
                                jint physicalViewInsetBottom,
                                jint physicalViewInsetLeft) {
-  const blink::ViewportMetrics metrics = {
-      .device_pixel_ratio = devicePixelRatio,
-      .physical_width = physicalWidth,
-      .physical_height = physicalHeight,
-      .physical_padding_top = physicalPaddingTop,
-      .physical_padding_right = physicalPaddingRight,
-      .physical_padding_bottom = physicalPaddingBottom,
-      .physical_padding_left = physicalPaddingLeft,
-      .physical_view_inset_top = physicalViewInsetTop,
-      .physical_view_inset_right = physicalViewInsetRight,
-      .physical_view_inset_bottom = physicalViewInsetBottom,
-      .physical_view_inset_left = physicalViewInsetLeft,
+  const blink::ViewportMetrics metrics{
+      static_cast<double>(devicePixelRatio),
+      static_cast<double>(physicalWidth),
+      static_cast<double>(physicalHeight),
+      static_cast<double>(physicalPaddingTop),
+      static_cast<double>(physicalPaddingRight),
+      static_cast<double>(physicalPaddingBottom),
+      static_cast<double>(physicalPaddingLeft),
+      static_cast<double>(physicalViewInsetTop),
+      static_cast<double>(physicalViewInsetRight),
+      static_cast<double>(physicalViewInsetBottom),
+      static_cast<double>(physicalViewInsetLeft),
   };
 
   ANDROID_SHELL_HOLDER->SetViewportMetrics(metrics);
@@ -360,7 +361,7 @@ static jobject GetBitmap(JNIEnv* env, jobject jcaller, jlong shell_holder) {
     return nullptr;
   }
 
-  auto pixels_src = static_cast<const int32_t*>(screenshot.data->data());
+  auto* pixels_src = static_cast<const int32_t*>(screenshot.data->data());
 
   // Our configuration of Skia does not support rendering to the
   // BitmapConfig.ARGB_8888 format expected by android.graphics.Bitmap.
@@ -475,6 +476,13 @@ static void SetSemanticsEnabled(JNIEnv* env,
   ANDROID_SHELL_HOLDER->GetPlatformView()->SetSemanticsEnabled(enabled);
 }
 
+static void SetAccessibilityFeatures(JNIEnv* env,
+                                     jobject jcaller,
+                                     jlong shell_holder,
+                                     jint flags) {
+  ANDROID_SHELL_HOLDER->GetPlatformView()->SetAccessibilityFeatures(flags);
+}
+
 static jboolean GetIsSoftwareRendering(JNIEnv* env, jobject jcaller) {
   return FlutterMain::Get().GetSettings().enable_software_rendering;
 }
@@ -530,61 +538,30 @@ static void InvokePlatformMessageEmptyResponseCallback(JNIEnv* env,
       );
 }
 
-bool PlatformViewAndroid::Register(JNIEnv* env) {
-  if (env == nullptr) {
-    return false;
-  }
-
-  g_flutter_view_class = new fml::jni::ScopedJavaGlobalRef<jclass>(
-      env, env->FindClass("io/flutter/view/FlutterView"));
-  if (g_flutter_view_class->is_null()) {
-    return false;
-  }
-
-  g_flutter_native_view_class = new fml::jni::ScopedJavaGlobalRef<jclass>(
-      env, env->FindClass("io/flutter/view/FlutterNativeView"));
-  if (g_flutter_native_view_class->is_null()) {
-    return false;
-  }
-
-  g_surface_texture_class = new fml::jni::ScopedJavaGlobalRef<jclass>(
-      env, env->FindClass("android/graphics/SurfaceTexture"));
-  if (g_surface_texture_class->is_null()) {
-    return false;
-  }
-
-  static const JNINativeMethod native_view_methods[] = {
+bool RegisterApi(JNIEnv* env) {
+  static const JNINativeMethod flutter_jni_methods[] = {
+      // Start of methods from FlutterNativeView
       {
           .name = "nativeAttach",
-          .signature = "(Lio/flutter/view/FlutterNativeView;)J",
-          .fnPtr = reinterpret_cast<void*>(&shell::Attach),
-      },
-      {
-          .name = "nativeDestroy",
-          .signature = "(J)V",
-          .fnPtr = reinterpret_cast<void*>(&shell::Destroy),
-      },
-      {
-          .name = "nativeRunBundleAndSnapshot",
-          .signature = "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/"
-                       "String;ZLandroid/content/res/AssetManager;)V",
-          .fnPtr = reinterpret_cast<void*>(&shell::RunBundleAndSnapshot),
-      },
-      {
-          .name = "nativeRunBundleAndSource",
-          .signature =
-              "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
-          .fnPtr = reinterpret_cast<void*>(&shell::RunBundleAndSource),
-      },
-      {
-          .name = "nativeSetAssetBundlePathOnUI",
-          .signature = "(JLjava/lang/String;)V",
-          .fnPtr = reinterpret_cast<void*>(&shell::SetAssetBundlePathOnUI),
+          .signature = "(Lio/flutter/embedding/engine/FlutterJNI;Z)J",
+          .fnPtr = reinterpret_cast<void*>(&shell::AttachJNI),
       },
       {
           .name = "nativeDetach",
           .signature = "(J)V",
-          .fnPtr = reinterpret_cast<void*>(&shell::Detach),
+          .fnPtr = reinterpret_cast<void*>(&shell::DetachJNI),
+      },
+      {
+          .name = "nativeDestroy",
+          .signature = "(J)V",
+          .fnPtr = reinterpret_cast<void*>(&shell::DestroyJNI),
+      },
+      {
+          .name = "nativeRunBundleAndSnapshotFromLibrary",
+          .signature = "(J[Ljava/lang/String;Ljava/lang/String;"
+                       "Ljava/lang/String;Landroid/content/res/AssetManager;)V",
+          .fnPtr =
+              reinterpret_cast<void*>(&shell::RunBundleAndSnapshotFromLibrary),
       },
       {
           .name = "nativeGetObservatoryUri",
@@ -614,12 +591,16 @@ bool PlatformViewAndroid::Register(JNIEnv* env) {
           .fnPtr = reinterpret_cast<void*>(
               &shell::InvokePlatformMessageEmptyResponseCallback),
       },
-  };
 
-  static const JNINativeMethod view_methods[] = {
+      // Start of methods from FlutterView
+      {
+          .name = "nativeGetBitmap",
+          .signature = "(J)Landroid/graphics/Bitmap;",
+          .fnPtr = reinterpret_cast<void*>(&shell::GetBitmap),
+      },
       {
           .name = "nativeSurfaceCreated",
-          .signature = "(JLandroid/view/Surface;I)V",
+          .signature = "(JLandroid/view/Surface;)V",
           .fnPtr = reinterpret_cast<void*>(&shell::SurfaceCreated),
       },
       {
@@ -638,11 +619,6 @@ bool PlatformViewAndroid::Register(JNIEnv* env) {
           .fnPtr = reinterpret_cast<void*>(&shell::SetViewportMetrics),
       },
       {
-          .name = "nativeGetBitmap",
-          .signature = "(J)Landroid/graphics/Bitmap;",
-          .fnPtr = reinterpret_cast<void*>(&shell::GetBitmap),
-      },
-      {
           .name = "nativeDispatchPointerDataPacket",
           .signature = "(JLjava/nio/ByteBuffer;I)V",
           .fnPtr = reinterpret_cast<void*>(&shell::DispatchPointerDataPacket),
@@ -656,6 +632,11 @@ bool PlatformViewAndroid::Register(JNIEnv* env) {
           .name = "nativeSetSemanticsEnabled",
           .signature = "(JZ)V",
           .fnPtr = reinterpret_cast<void*>(&shell::SetSemanticsEnabled),
+      },
+      {
+          .name = "nativeSetAccessibilityFeatures",
+          .signature = "(JI)V",
+          .fnPtr = reinterpret_cast<void*>(&shell::SetAccessibilityFeatures),
       },
       {
           .name = "nativeGetIsSoftwareRenderingEnabled",
@@ -679,45 +660,114 @@ bool PlatformViewAndroid::Register(JNIEnv* env) {
       },
   };
 
-  if (env->RegisterNatives(g_flutter_native_view_class->obj(),
-                           native_view_methods,
-                           arraysize(native_view_methods)) != 0) {
-    return false;
-  }
-
-  if (env->RegisterNatives(g_flutter_view_class->obj(), view_methods,
-                           arraysize(view_methods)) != 0) {
+  if (env->RegisterNatives(g_flutter_jni_class->obj(), flutter_jni_methods,
+                           arraysize(flutter_jni_methods)) != 0) {
+    FML_LOG(ERROR) << "Failed to RegisterNatives with FlutterJNI";
     return false;
   }
 
   g_handle_platform_message_method =
-      env->GetMethodID(g_flutter_native_view_class->obj(),
-                       "handlePlatformMessage", "(Ljava/lang/String;[BI)V");
+      env->GetMethodID(g_flutter_jni_class->obj(), "handlePlatformMessage",
+                       "(Ljava/lang/String;[BI)V");
 
   if (g_handle_platform_message_method == nullptr) {
+    FML_LOG(ERROR) << "Could not locate handlePlatformMessage method";
     return false;
   }
 
-  g_handle_platform_message_response_method =
-      env->GetMethodID(g_flutter_native_view_class->obj(),
-                       "handlePlatformMessageResponse", "(I[B)V");
+  g_handle_platform_message_response_method = env->GetMethodID(
+      g_flutter_jni_class->obj(), "handlePlatformMessageResponse", "(I[B)V");
 
   if (g_handle_platform_message_response_method == nullptr) {
+    FML_LOG(ERROR) << "Could not locate handlePlatformMessageResponse method";
     return false;
   }
 
   g_update_semantics_method =
-      env->GetMethodID(g_flutter_native_view_class->obj(), "updateSemantics",
+      env->GetMethodID(g_flutter_jni_class->obj(), "updateSemantics",
                        "(Ljava/nio/ByteBuffer;[Ljava/lang/String;)V");
 
   if (g_update_semantics_method == nullptr) {
+    FML_LOG(ERROR) << "Could not locate updateSemantics method";
     return false;
   }
 
-  g_on_first_frame_method = env->GetMethodID(g_flutter_native_view_class->obj(),
-                                             "onFirstFrame", "()V");
+  g_update_custom_accessibility_actions_method = env->GetMethodID(
+      g_flutter_jni_class->obj(), "updateCustomAccessibilityActions",
+      "(Ljava/nio/ByteBuffer;[Ljava/lang/String;)V");
+
+  if (g_update_custom_accessibility_actions_method == nullptr) {
+    FML_LOG(ERROR)
+        << "Could not locate updateCustomAccessibilityActions method";
+    return false;
+  }
+
+  g_on_first_frame_method =
+      env->GetMethodID(g_flutter_jni_class->obj(), "onFirstFrame", "()V");
 
   if (g_on_first_frame_method == nullptr) {
+    FML_LOG(ERROR) << "Could not locate onFirstFrame method";
+    return false;
+  }
+
+  g_on_engine_restart_method =
+      env->GetMethodID(g_flutter_jni_class->obj(), "onPreEngineRestart", "()V");
+
+  if (g_on_engine_restart_method == nullptr) {
+    FML_LOG(ERROR) << "Could not locate onEngineRestart method";
+    return false;
+  }
+
+  return true;
+}
+
+bool PlatformViewAndroid::Register(JNIEnv* env) {
+  if (env == nullptr) {
+    FML_LOG(ERROR) << "No JNIEnv provided";
+    return false;
+  }
+
+  g_flutter_callback_info_class = new fml::jni::ScopedJavaGlobalRef<jclass>(
+      env, env->FindClass("io/flutter/view/FlutterCallbackInformation"));
+  if (g_flutter_callback_info_class->is_null()) {
+    FML_LOG(ERROR) << "Could not locate FlutterCallbackInformation class";
+    return false;
+  }
+
+  g_flutter_callback_info_constructor = env->GetMethodID(
+      g_flutter_callback_info_class->obj(), "<init>",
+      "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
+  if (g_flutter_callback_info_constructor == nullptr) {
+    FML_LOG(ERROR) << "Could not locate FlutterCallbackInformation constructor";
+    return false;
+  }
+
+  g_flutter_jni_class = new fml::jni::ScopedJavaGlobalRef<jclass>(
+      env, env->FindClass("io/flutter/embedding/engine/FlutterJNI"));
+  if (g_flutter_jni_class->is_null()) {
+    FML_LOG(ERROR) << "Failed to find FlutterJNI Class.";
+    return false;
+  }
+
+  g_surface_texture_class = new fml::jni::ScopedJavaGlobalRef<jclass>(
+      env, env->FindClass("android/graphics/SurfaceTexture"));
+  if (g_surface_texture_class->is_null()) {
+    FML_LOG(ERROR) << "Could not locate SurfaceTexture class";
+    return false;
+  }
+
+  static const JNINativeMethod callback_info_methods[] = {
+      {
+          .name = "nativeLookupCallbackInformation",
+          .signature = "(J)Lio/flutter/view/FlutterCallbackInformation;",
+          .fnPtr = reinterpret_cast<void*>(&shell::LookupCallbackInformation),
+      },
+  };
+
+  if (env->RegisterNatives(g_flutter_callback_info_class->obj(),
+                           callback_info_methods,
+                           arraysize(callback_info_methods)) != 0) {
+    FML_LOG(ERROR) << "Failed to RegisterNatives with FlutterCallbackInfo";
     return false;
   }
 
@@ -725,6 +775,7 @@ bool PlatformViewAndroid::Register(JNIEnv* env) {
       g_surface_texture_class->obj(), "attachToGLContext", "(I)V");
 
   if (g_attach_to_gl_context_method == nullptr) {
+    FML_LOG(ERROR) << "Could not locate attachToGlContext method";
     return false;
   }
 
@@ -732,6 +783,7 @@ bool PlatformViewAndroid::Register(JNIEnv* env) {
       env->GetMethodID(g_surface_texture_class->obj(), "updateTexImage", "()V");
 
   if (g_update_tex_image_method == nullptr) {
+    FML_LOG(ERROR) << "Could not locate updateTexImage method";
     return false;
   }
 
@@ -739,6 +791,7 @@ bool PlatformViewAndroid::Register(JNIEnv* env) {
       g_surface_texture_class->obj(), "getTransformMatrix", "([F)V");
 
   if (g_get_transform_matrix_method == nullptr) {
+    FML_LOG(ERROR) << "Could not locate getTransformMatrix method";
     return false;
   }
 
@@ -746,10 +799,11 @@ bool PlatformViewAndroid::Register(JNIEnv* env) {
       g_surface_texture_class->obj(), "detachFromGLContext", "()V");
 
   if (g_detach_from_gl_context_method == nullptr) {
+    FML_LOG(ERROR) << "Could not locate detachFromGlContext method";
     return false;
   }
 
-  return true;
+  return RegisterApi(env);
 }
 
 }  // namespace shell

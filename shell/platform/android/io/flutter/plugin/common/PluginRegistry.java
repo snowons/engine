@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Flutter Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@ package io.flutter.plugin.common;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import io.flutter.plugin.platform.PlatformViewRegistry;
 import io.flutter.view.FlutterNativeView;
 import io.flutter.view.FlutterView;
 import io.flutter.view.TextureRegistry;
@@ -100,6 +101,13 @@ public interface PluginRegistry {
         TextureRegistry textures();
 
         /**
+         * Returns the application's {@link PlatformViewRegistry}.
+         *
+         * Plugins can use the platform registry to register their view factories.
+         */
+        PlatformViewRegistry platformViewRegistry();
+
+        /**
          * Returns the {@link FlutterView} that's instantiated by this plugin's
          * {@link #activity() activity}.
          */
@@ -109,21 +117,21 @@ public interface PluginRegistry {
         /**
          * Returns the file name for the given asset.
          * The returned file name can be used to access the asset in the APK
-         * through the {@link AssetManager} API.
+         * through the {@link android.content.res.AssetManager} API.
          *
          * @param asset the name of the asset. The name can be hierarchical
-         * @return      the filename to be used with {@link AssetManager}
+         * @return      the filename to be used with {@link android.content.res.AssetManager}
          */
         String lookupKeyForAsset(String asset);
 
         /**
          * Returns the file name for the given asset which originates from the
          * specified packageName. The returned file name can be used to access
-         * the asset in the APK through the {@link AssetManager} API.
+         * the asset in the APK through the {@link android.content.res.AssetManager} API.
          *
          * @param asset       the name of the asset. The name can be hierarchical
          * @param packageName the name of the package from which the asset originates
-         * @return            the file name to be used with {@link AssetManager}
+         * @return            the file name to be used with {@link android.content.res.AssetManager}
          */
         String lookupKeyForAsset(String asset, String packageName);
 
