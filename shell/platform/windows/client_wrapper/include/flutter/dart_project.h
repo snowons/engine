@@ -1,0 +1,56 @@
+// Copyright 2013 The Flutter Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+#ifndef FLUTTER_SHELL_PLATFORM_WINDOWS_CLIENT_WRAPPER_INCLUDE_FLUTTER_DART_PROJECT_H_
+#define FLUTTER_SHELL_PLATFORM_WINDOWS_CLIENT_WRAPPER_INCLUDE_FLUTTER_DART_PROJECT_H_
+
+#include <string>
+#include <vector>
+
+namespace flutter {
+
+// A set of Flutter and Dart assets used to initialize a Flutter engine.
+class DartProject {
+ public:
+  // Creates a DartProject from a directory path. The directory should contain
+  // the following top-level items:
+  // - icudtl.dat (provided as a resource by the Flutter tool)
+  // - flutter_assets (as built by the Flutter tool)
+  // - app.so, for an AOT build (as built by the Flutter tool)
+  //
+  // The path can either be absolute, or relative to the directory containing
+  // the running executable.
+  explicit DartProject(const std::wstring& path) {
+    assets_path_ = path + L"\\flutter_assets";
+    icu_data_path_ = path + L"\\icudtl.dat";
+    aot_library_path_ = path + L"\\app.so";
+  }
+
+  ~DartProject() = default;
+
+ private:
+  // Accessors for internals are private, so that they can be changed if more
+  // flexible options for project structures are needed later without it
+  // being a breaking change. Provide access to internal classes that need
+  // them.
+  friend class FlutterEngine;
+  friend class FlutterViewController;
+  friend class DartProjectTest;
+
+  const std::wstring& assets_path() const { return assets_path_; }
+  const std::wstring& icu_data_path() const { return icu_data_path_; }
+  const std::wstring& aot_library_path() const { return aot_library_path_; }
+
+  // The path to the assets directory.
+  std::wstring assets_path_;
+  // The path to the ICU data.
+  std::wstring icu_data_path_;
+  // The path to the AOT library. This will always return a path, but non-AOT
+  // builds will not be expected to actually have a library at that path.
+  std::wstring aot_library_path_;
+};
+
+}  // namespace flutter
+
+#endif  // FLUTTER_SHELL_PLATFORM_WINDOWS_CLIENT_WRAPPER_INCLUDE_FLUTTER_DART_PROJECT_H_

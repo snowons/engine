@@ -13,7 +13,7 @@
 #include "flutter/fml/macros.h"
 #include "flutter/fml/memory/ref_counted.h"
 
-namespace blink {
+namespace flutter {
 
 class AssetManager final : public AssetResolver {
  public:
@@ -25,10 +25,15 @@ class AssetManager final : public AssetResolver {
 
   void PushBack(std::unique_ptr<AssetResolver> resolver);
 
-  // |blink::AssetResolver|
+  std::deque<std::unique_ptr<AssetResolver>> TakeResolvers();
+
+  // |AssetResolver|
   bool IsValid() const override;
 
-  // |blink::AssetResolver|
+  // |AssetResolver|
+  bool IsValidAfterAssetManagerChange() const override;
+
+  // |AssetResolver|
   std::unique_ptr<fml::Mapping> GetAsMapping(
       const std::string& asset_name) const override;
 
@@ -38,6 +43,6 @@ class AssetManager final : public AssetResolver {
   FML_DISALLOW_COPY_AND_ASSIGN(AssetManager);
 };
 
-}  // namespace blink
+}  // namespace flutter
 
 #endif  // FLUTTER_ASSETS_ASSET_MANAGER_H_

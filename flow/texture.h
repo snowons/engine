@@ -11,27 +11,33 @@
 #include "flutter/fml/synchronization/waitable_event.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 
-namespace flow {
+class GrDirectContext;
+
+namespace flutter {
 
 class Texture {
- protected:
-  Texture(int64_t id);
-
  public:
-  // Called from GPU thread.
-  virtual ~Texture();
+  Texture(int64_t id);  // Called from UI or raster thread.
+  virtual ~Texture();   // Called from raster thread.
 
-  // Called from GPU thread.
-  virtual void Paint(SkCanvas& canvas, const SkRect& bounds, bool freeze) = 0;
+  // Called from raster thread.
+  virtual void Paint(SkCanvas& canvas,
+                     const SkRect& bounds,
+                     bool freeze,
+                     GrDirectContext* context,
+                     SkFilterQuality quality) = 0;
 
-  // Called from GPU thread.
+  // Called from raster thread.
   virtual void OnGrContextCreated() = 0;
 
-  // Called from GPU thread.
+  // Called from raster thread.
   virtual void OnGrContextDestroyed() = 0;
 
-  // Called on GPU thread.
+  // Called on raster thread.
   virtual void MarkNewFrameAvailable() = 0;
+
+  // Called on raster thread.
+  virtual void OnTextureUnregistered() = 0;
 
   int64_t Id() { return id_; }
 
@@ -44,21 +50,20 @@ class Texture {
 class TextureRegistry {
  public:
   TextureRegistry();
-  ~TextureRegistry();
 
-  // Called from GPU thread.
+  // Called from raster thread.
   void RegisterTexture(std::shared_ptr<Texture> texture);
 
-  // Called from GPU thread.
+  // Called from raster thread.
   void UnregisterTexture(int64_t id);
 
-  // Called from GPU thread.
+  // Called from raster thread.
   std::shared_ptr<Texture> GetTexture(int64_t id);
 
-  // Called from GPU thread.
+  // Called from raster thread.
   void OnGrContextCreated();
 
-  // Called from GPU thread.
+  // Called from raster thread.
   void OnGrContextDestroyed();
 
  private:
@@ -67,6 +72,6 @@ class TextureRegistry {
   FML_DISALLOW_COPY_AND_ASSIGN(TextureRegistry);
 };
 
-}  // namespace flow
+}  // namespace flutter
 
 #endif  // FLUTTER_FLOW_TEXTURE_H_

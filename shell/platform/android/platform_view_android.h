@@ -15,10 +15,12 @@
 #include "flutter/fml/platform/android/scoped_java_ref.h"
 #include "flutter/lib/ui/window/platform_message.h"
 #include "flutter/shell/common/platform_view.h"
-#include "flutter/shell/platform/android/android_native_window.h"
-#include "flutter/shell/platform/android/android_surface.h"
+#include "flutter/shell/platform/android/jni/platform_view_android_jni.h"
+#include "flutter/shell/platform/android/platform_view_android_delegate/platform_view_android_delegate.h"
+#include "flutter/shell/platform/android/surface/android_native_window.h"
+#include "flutter/shell/platform/android/surface/android_surface.h"
 
-namespace shell {
+namespace flutter {
 
 class PlatformViewAndroid final : public PlatformView {
  public:
@@ -27,22 +29,25 @@ class PlatformViewAndroid final : public PlatformView {
   // Creates a PlatformViewAndroid with no rendering surface for use with
   // background execution.
   PlatformViewAndroid(PlatformView::Delegate& delegate,
-                      blink::TaskRunners task_runners,
-                      fml::jni::JavaObjectWeakGlobalRef java_object);
+                      flutter::TaskRunners task_runners,
+                      std::shared_ptr<PlatformViewAndroidJNI> jni_facade);
 
   // Creates a PlatformViewAndroid with a rendering surface.
   PlatformViewAndroid(PlatformView::Delegate& delegate,
-                      blink::TaskRunners task_runners,
-                      fml::jni::JavaObjectWeakGlobalRef java_object,
+                      flutter::TaskRunners task_runners,
+                      std::shared_ptr<PlatformViewAndroidJNI> jni_facade,
                       bool use_software_rendering);
 
   ~PlatformViewAndroid() override;
 
   void NotifyCreated(fml::RefPtr<AndroidNativeWindow> native_window);
 
+  void NotifySurfaceWindowChanged(
+      fml::RefPtr<AndroidNativeWindow> native_window);
+
   void NotifyChanged(const SkISize& size);
 
-  // |shell::PlatformView|
+  // |PlatformView|
   void NotifyDestroyed() override;
 
   void DispatchPlatformMessage(JNIEnv* env,
@@ -74,36 +79,43 @@ class PlatformViewAndroid final : public PlatformView {
       const fml::jni::JavaObjectWeakGlobalRef& surface_texture);
 
  private:
-  const fml::jni::JavaObjectWeakGlobalRef java_object_;
-  const std::unique_ptr<AndroidSurface> android_surface_;
+  const std::shared_ptr<PlatformViewAndroidJNI> jni_facade_;
+
+  PlatformViewAndroidDelegate platform_view_android_delegate_;
+
+  std::unique_ptr<AndroidSurface> android_surface_;
   // We use id 0 to mean that no response is expected.
   int next_response_id_ = 1;
-  std::unordered_map<int, fml::RefPtr<blink::PlatformMessageResponse>>
+  std::unordered_map<int, fml::RefPtr<flutter::PlatformMessageResponse>>
       pending_responses_;
 
-  // |shell::PlatformView|
+  // |PlatformView|
   void UpdateSemantics(
-      blink::SemanticsNodeUpdates update,
-      blink::CustomAccessibilityActionUpdates actions) override;
+      flutter::SemanticsNodeUpdates update,
+      flutter::CustomAccessibilityActionUpdates actions) override;
 
-  // |shell::PlatformView|
+  // |PlatformView|
   void HandlePlatformMessage(
-      fml::RefPtr<blink::PlatformMessage> message) override;
+      fml::RefPtr<flutter::PlatformMessage> message) override;
 
-  // |shell::PlatformView|
+  // |PlatformView|
   void OnPreEngineRestart() const override;
 
-  // |shell::PlatformView|
+  // |PlatformView|
   std::unique_ptr<VsyncWaiter> CreateVSyncWaiter() override;
 
-  // |shell::PlatformView|
+  // |PlatformView|
   std::unique_ptr<Surface> CreateRenderingSurface() override;
 
-  // |shell::PlatformView|
-  sk_sp<GrContext> CreateResourceContext() const override;
+  // |PlatformView|
+  sk_sp<GrDirectContext> CreateResourceContext() const override;
 
-  // |shell::PlatformView|
+  // |PlatformView|
   void ReleaseResourceContext() const override;
+
+  // |PlatformView|
+  std::unique_ptr<std::vector<std::string>> ComputePlatformResolvedLocales(
+      const std::vector<std::string>& supported_locale_data) override;
 
   void InstallFirstFrameCallback();
 
@@ -111,7 +123,6 @@ class PlatformViewAndroid final : public PlatformView {
 
   FML_DISALLOW_COPY_AND_ASSIGN(PlatformViewAndroid);
 };
-
-}  // namespace shell
+}  // namespace flutter
 
 #endif  // SHELL_PLATFORM_ANDROID_PLATFORM_VIEW_ANDROID_H_

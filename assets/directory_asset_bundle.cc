@@ -10,24 +10,32 @@
 #include "flutter/fml/file.h"
 #include "flutter/fml/mapping.h"
 
-namespace blink {
+namespace flutter {
 
-DirectoryAssetBundle::DirectoryAssetBundle(fml::UniqueFD descriptor)
+DirectoryAssetBundle::DirectoryAssetBundle(
+    fml::UniqueFD descriptor,
+    bool is_valid_after_asset_manager_change)
     : descriptor_(std::move(descriptor)) {
   if (!fml::IsDirectory(descriptor_)) {
     return;
   }
+  is_valid_after_asset_manager_change_ = is_valid_after_asset_manager_change;
   is_valid_ = true;
 }
 
 DirectoryAssetBundle::~DirectoryAssetBundle() = default;
 
-// |blink::AssetResolver|
+// |AssetResolver|
 bool DirectoryAssetBundle::IsValid() const {
   return is_valid_;
 }
 
-// |blink::AssetResolver|
+// |AssetResolver|
+bool DirectoryAssetBundle::IsValidAfterAssetManagerChange() const {
+  return is_valid_after_asset_manager_change_;
+}
+
+// |AssetResolver|
 std::unique_ptr<fml::Mapping> DirectoryAssetBundle::GetAsMapping(
     const std::string& asset_name) const {
   if (!is_valid_) {
@@ -38,11 +46,11 @@ std::unique_ptr<fml::Mapping> DirectoryAssetBundle::GetAsMapping(
   auto mapping = std::make_unique<fml::FileMapping>(fml::OpenFile(
       descriptor_, asset_name.c_str(), false, fml::FilePermission::kRead));
 
-  if (mapping->GetMapping() == nullptr) {
+  if (!mapping->IsValid()) {
     return nullptr;
   }
 
   return mapping;
 }
 
-}  // namespace blink
+}  // namespace flutter
